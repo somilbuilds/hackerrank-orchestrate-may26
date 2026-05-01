@@ -31,3 +31,11 @@ data/index/
 data/embeddings/
 *.sqlite
 *.db
+
+# local hackathon artifacts
+log.txt
+code-zip.zip
+support_tickets_github/
+support_tickets/__MACOSX/
+support_tickets/trial_runs/
+support_tickets/**/output*.csv
