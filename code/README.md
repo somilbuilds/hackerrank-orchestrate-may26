@@ -6,8 +6,10 @@ Production-ready support triage pipeline for HackerRank Orchestrate that process
 
 - Deterministic offline core (works even when external APIs are unavailable)
 - Corpus-grounded retrieval from local `data/` only
+- Evidence-first product-area routing (company-constrained weighted voting)
 - Safety-aware escalation logic for high-risk / low-confidence requests
 - Optional LLM polishing layer (`Gemini` or `Groq`) with strict fallback behavior
+- Confidence tagging in justifications (`confidence`, `area_confidence`)
 - Evaluator-compatible CSV output (`status`, `product_area`, `response`, `justification`, `request_type`)
 
 ## Repository Components
@@ -26,9 +28,9 @@ Production-ready support triage pipeline for HackerRank Orchestrate that process
 1. Read ticket row (`Issue`, `Subject`, `Company`)
 2. Infer coarse company signal and request type
 3. Retrieve top-k relevant corpus chunks
-4. Reconcile company/product area using evidence + lightweight overrides
+4. Reconcile company/product area using evidence-first voting + deterministic tie-breakers
 5. Decide `replied` vs `escalated` via risk and confidence checks
-6. Generate grounded response + concise justification
+6. Generate grounded response + concise justification (with confidence tags)
 7. Optionally polish language with LLM (never required for completion)
 8. Write final row into output CSV
 
@@ -85,14 +87,15 @@ Measured against `support_tickets/sample_support_tickets.csv` labeled fields:
 
 - `status` accuracy: `10/10` (`1.00`)
 - `request_type` accuracy: `10/10` (`1.00`)
-- `product_area` accuracy: `6/10` (`0.60`)
-- joint accuracy on all 3 labels per row: `6/10` (`0.60`)
+- `product_area` accuracy: `9/10` (`0.90`)
+- joint accuracy on all 3 labels per row: `9/10` (`0.90`)
 - fallback response rate: `2/10` (`0.20`)
 
 Interpretation:
 
 - Routing safety and request typing are stable.
-- Main remaining error surface is `product_area` disambiguation in edge rows.
+- Product-area routing improved significantly after evidence-voting pass.
+- One edge-case product-area mismatch remains on sample.
 
 ## Design Decisions
 
@@ -103,16 +106,16 @@ Interpretation:
 
 ## Known Gaps
 
-- `product_area` still has mismatch cases on sample labels.
+- One remaining `product_area` edge mismatch on sample set.
 - Response text quality can be improved further with tighter evidence summarization and domain-specific templates.
 - Cross-domain retrieval occasionally introduces noisy secondary snippets.
 
 ## Improvement Backlog
 
-- Add confidence-weighted product-area voting over top evidence chunks.
-- Add domain-specific response templates for recurring flows (account deletion, lost/stolen card, outages).
+- Add stronger multi-intent decomposition and per-intent evidence fusion.
+- Add richer domain templates for recurring flows (account deletion, lost/stolen card, outages).
 - Add regression test script over sample labels for faster iteration.
-- Add retrieval filters by explicit company when high-confidence company is known.
+- Add stricter retrieval fallback rules when company inference is low-confidence.
 
 ## Output Contract
 

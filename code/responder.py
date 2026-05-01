@@ -59,12 +59,26 @@ def _compose_grounded_reply(evidence: list[EvidenceChunk]) -> str:
     return f"{intro} {points}"
 
 
+def _domain_tone_prefix(product_area: str) -> str:
+    if product_area == "travel_support":
+        return "I can help you with the immediate travel-support steps."
+    if product_area == "privacy":
+        return "I understand this is privacy-sensitive; here are the safest next steps."
+    if product_area == "screen":
+        return "Here are the most relevant assessment platform steps."
+    if product_area == "community":
+        return "For the community workflow, this is the best supported path."
+    return "Based on the support corpus, here is the recommended next step."
+
+
 def build_response(
     ticket: Ticket,
     status: str,
     product_area: str,
     evidence: list[EvidenceChunk],
     request_type: str,
+    escalation_reason: str,
+    confidence: str,
 ) -> tuple[str, str]:
     if request_type == "invalid":
         return (
@@ -78,8 +92,8 @@ def build_response(
             "specialist because this case is sensitive or needs account-level review."
         )
         justification = (
-            f"Escalated due to risk/scope and confidence constraints in {product_area}. "
-            f"Top evidence count={len(evidence)}."
+            f"Escalated in {product_area} due to {escalation_reason}; "
+            f"confidence={confidence}; top_evidence_count={len(evidence)}."
         )
         return response, justification
 
@@ -90,10 +104,10 @@ def build_response(
         )
 
     top = evidence[0]
-    response = _compose_grounded_reply(evidence)
+    response = f"{_domain_tone_prefix(product_area)} {_compose_grounded_reply(evidence)}"
     sources = ", ".join(chunk.title for chunk in evidence[:2])
     justification = (
         f"Replied using corpus-grounded evidence from {sources}. "
-        f"Top score={top.score:.3f}; product_area={product_area}."
+        f"Top score={top.score:.3f}; confidence={confidence}; product_area={product_area}."
     )
     return response, justification

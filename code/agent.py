@@ -10,9 +10,9 @@ from classifier import (
     infer_product_area_from_evidence,
 )
 from corpus import CorpusIndex
-from models import Prediction, Ticket
+from models import EvidenceChunk, Prediction, Ticket
 from responder import build_response
-from router import should_escalate
+from router import assess_routing
 
 
 class SupportTriageAgent:
@@ -33,21 +33,25 @@ class SupportTriageAgent:
         )
         fallback_company = infer_company(ticket)
         request_type = classify_request_type(ticket)
+        queries = self._build_queries(ticket)
 
-        evidence = self._index.search(
-            query=ticket.combined_text,
-            top_k=self._top_k,
-            company_hint=None,
+        evidence = self._retrieve_evidence(
+            queries=queries,
+            fallback_company=fallback_company,
         )
 
         company = infer_company_from_evidence(ticket, evidence, fallback_company)
-        product_area = infer_product_area_from_evidence(
+        product_area, area_confidence = infer_product_area_from_evidence(
             ticket=ticket,
             company=company,
             evidence=evidence,
             request_type=request_type,
         )
-        escalated = should_escalate(ticket, request_type, evidence)
+        escalated, escalation_reason, confidence = assess_routing(
+            ticket=ticket,
+            request_type=request_type,
+            evidence=evidence,
+        )
         status = "escalated" if escalated else "replied"
         response, justification = build_response(
             ticket=ticket,
@@ -55,7 +59,10 @@ class SupportTriageAgent:
             product_area=product_area,
             evidence=evidence,
             request_type=request_type,
+            escalation_reason=escalation_reason,
+            confidence=confidence,
         )
+        justification = f"{justification} area_confidence={area_confidence}."
 
         if self._polisher is not None and status == "replied":
             response, justification = self._polisher.polish(
@@ -73,6 +80,44 @@ class SupportTriageAgent:
             justification=justification,
             request_type=request_type,
         )
+
+    def _build_queries(self, ticket: Ticket) -> list[str]:
+        text = ticket.combined_text
+        separators = ["\n", ". ", " and ", " also ", "; "]
+        clauses = [text]
+        for sep in separators:
+            next_clauses: list[str] = []
+            for clause in clauses:
+                next_clauses.extend(part.strip() for part in clause.split(sep) if part.strip())
+            clauses = next_clauses or clauses
+        ranked = sorted(clauses, key=len, reverse=True)
+        unique: list[str] = []
+        for clause in ranked:
+            if clause not in unique:
+                unique.append(clause)
+            if len(unique) >= 2:
+                break
+        return unique or [text]
+
+    def _retrieve_evidence(
+        self,
+        queries: list[str],
+        fallback_company: str,
+    ) -> list[EvidenceChunk]:
+        collected: dict[str, EvidenceChunk] = {}
+        company_hint = fallback_company if fallback_company in {"hackerrank", "claude", "visa"} else None
+
+        for query in queries:
+            primary = self._index.search(query=query, top_k=self._top_k, company_hint=company_hint)
+            secondary = self._index.search(query=query, top_k=max(2, self._top_k // 2), company_hint=None)
+            for chunk in primary + secondary:
+                key = chunk.source_path
+                prev = collected.get(key)
+                if prev is None or chunk.score > prev.score:
+                    collected[key] = chunk
+
+        merged = sorted(collected.values(), key=lambda c: c.score, reverse=True)
+        return merged[: self._top_k]
 
     @staticmethod
     def _read_rows(csv_path: Path) -> list[dict[str, str]]:
