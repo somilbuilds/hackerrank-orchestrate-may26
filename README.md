@@ -1,134 +1,108 @@
-# Support Triage Agent (Offline-First, Corpus-Grounded)
+# 🎫 Multi-Domain Support Triage Agent
 
-Production-ready support triage pipeline for HackerRank Orchestrate that processes tickets across `HackerRank`, `Claude`, and `Visa` domains and writes evaluator-compatible predictions.
+> Corpus-grounded support triage across HackerRank, Claude, and Visa — deterministic by design, LLM-polished when available.
 
-## Highlights
+---
 
-- Deterministic offline core (works even when external APIs are unavailable)
-- Corpus-grounded retrieval from local `data/` only
-- Evidence-first product-area routing (company-constrained weighted voting)
-- Safety-aware escalation logic for high-risk / low-confidence requests
-- Optional LLM polishing layer (`Gemini` or `Groq`) with strict fallback behavior
-- Confidence tagging in justifications (`confidence`, `area_confidence`)
-- Evaluator-compatible CSV output (`status`, `product_area`, `response`, `justification`, `request_type`)
+## What It Does
 
-## Repository Components
+Reads support tickets from a CSV, classifies each one, retrieves relevant documentation from a local corpus, and decides whether to reply or escalate — then writes evaluator-compatible predictions to an output CSV.
 
-- `main.py`: CLI entrypoint and run orchestration
-- `agent.py`: end-to-end row prediction pipeline
-- `corpus.py`: markdown corpus indexing + TF-IDF retrieval
-- `classifier.py`: request-type and evidence-aware routing helpers
-- `router.py`: escalation policy
-- `responder.py`: deterministic grounded response composition
-- `llm.py`: optional Gemini/Groq polishers
-- `models.py`: dataclasses (`Ticket`, `EvidenceChunk`, `Prediction`)
+No hallucination. No web access. Every response is grounded in the provided `data/` corpus.
 
-## End-to-End Flow
+---
 
-1. Read ticket row (`Issue`, `Subject`, `Company`)
-2. Infer coarse company signal and request type
-3. Retrieve top-k relevant corpus chunks
-4. Reconcile company/product area using evidence-first voting + deterministic tie-breakers
-5. Decide `replied` vs `escalated` via risk and confidence checks
-6. Generate grounded response + concise justification (with confidence tags)
-7. Optionally polish language with LLM (never required for completion)
-8. Write final row into output CSV
+## Architecture
 
-## Setup
+```
+Ticket (Issue + Subject + Company)
+        ↓
+  Company Inference  →  Request Type Classification
+        ↓
+  Corpus Retrieval (TF-IDF, top-k chunks, company-constrained)
+        ↓
+  Evidence-Weighted Product Area Routing
+        ↓
+  Escalation Policy (risk keywords + confidence threshold)
+        ↓
+  Grounded Response + Justification
+        ↓
+  [Optional] LLM Polish (Groq / Gemini) — strict fallback, never blocks
+        ↓
+  output.csv
+```
 
-From repo root:
+---
+
+## Sample Set Performance
+
+| Metric | Score |
+|---|---|
+| `status` accuracy | 10 / 10 |
+| `request_type` accuracy | 10 / 10 |
+| `product_area` accuracy | 9 / 10 |
+| Joint accuracy (all 3) | 9 / 10 |
+
+---
+
+## Key Design Choices
+
+**Offline-first** — the pipeline runs fully deterministically without any API. LLM polishing is additive, never required.
+
+**Evidence-first routing** — product area and company are inferred from retrieved corpus chunks, not just ticket metadata. This handles cases where the `Company` column is empty or wrong.
+
+**Defensive escalation** — sensitive keywords (fraud, account takeover, identity theft), low retrieval confidence, and ambiguous cases always escalate rather than guess.
+
+**No hallucination guardrails** — the responder only composes from retrieved snippet text. URLs, phone numbers, and policy details are never invented.
+
+---
+
+## Escalation Policy
+
+Escalates when:
+- High-risk keywords detected (fraud, account takeover, security vulnerability)
+- Retrieval confidence below threshold (score < 0.07)
+- Manual/privileged actions requested (score review, access restore)
+- Bug with critical outage signal
+
+Replies when:
+- High-confidence corpus match found
+- Low-risk informational or procedural request
+- Out-of-scope/invalid — safe decline without unsupported claims
+
+---
+
+## Quickstart
 
 ```bash
 pip install -r code/requirements.txt
 ```
 
-Create `.env` (project root):
-
-```bash
-GEMINI_API_KEY=your_key_here
-GROQ_API_KEY=your_key_here
+Add a `.env` in the project root:
+```
+GROQ_API_KEY=your_key
+GEMINI_API_KEY=your_key
 ```
 
-`python-dotenv` auto-loads this file at runtime.
-
-## Usage
-
-### Offline-only (recommended baseline)
-
+Run offline:
 ```bash
 python code/main.py --input support_tickets/support_tickets.csv --output support_tickets/output.csv
 ```
 
-### With Gemini polishing
-
+Run with LLM polishing:
 ```bash
-python code/main.py --llm-provider gemini --gemini-model gemini-1.5-flash --input support_tickets/support_tickets.csv --output support_tickets/output.csv
+python code/main.py --llm-provider groq --input support_tickets/support_tickets.csv --output support_tickets/output.csv
+python code/main.py --llm-provider gemini --input support_tickets/support_tickets.csv --output support_tickets/output.csv
 ```
 
-### With Groq polishing
+---
 
-```bash
-python code/main.py --llm-provider groq --groq-model llama-3.1-8b-instant --input support_tickets/support_tickets.csv --output support_tickets/output.csv
-```
+## Output Format
 
-## CLI Options
-
-- `--input`: input CSV path (default `support_tickets/support_tickets.csv`)
-- `--output`: output CSV path (default `support_tickets/output.csv`)
-- `--data-dir`: support corpus root (default `data`)
-- `--top-k`: top retrieved chunks per ticket (default `5`)
-- `--llm-provider`: `none|gemini|groq` (default `none`)
-- `--gemini-model`: Gemini model name
-- `--groq-model`: Groq model name
-
-## Current Evaluation Snapshot (Sample Set)
-
-Measured against `support_tickets/sample_support_tickets.csv` labeled fields:
-
-- `status` accuracy: `10/10` (`1.00`)
-- `request_type` accuracy: `10/10` (`1.00`)
-- `product_area` accuracy: `9/10` (`0.90`)
-- joint accuracy on all 3 labels per row: `9/10` (`0.90`)
-- fallback response rate: `2/10` (`0.20`)
-
-Interpretation:
-
-- Routing safety and request typing are stable.
-- Product-area routing improved significantly after evidence-voting pass.
-- One edge-case product-area mismatch remains on sample.
-
-## Design Decisions
-
-- **Offline-first reliability:** submission can run deterministically without API dependency.
-- **Evidence grounding:** decisions and responses are tied to retrieved local corpus snippets.
-- **Defensive escalation:** uncertain or sensitive cases escalate instead of hallucinating.
-- **Optional generation layer:** LLM polishing improves readability when available, but never blocks completion.
-
-## Known Gaps
-
-- One remaining `product_area` edge mismatch on sample set.
-- Response text quality can be improved further with tighter evidence summarization and domain-specific templates.
-- Cross-domain retrieval occasionally introduces noisy secondary snippets.
-
-## Improvement Backlog
-
-- Add stronger multi-intent decomposition and per-intent evidence fusion.
-- Add richer domain templates for recurring flows (account deletion, lost/stolen card, outages).
-- Add regression test script over sample labels for faster iteration.
-- Add stricter retrieval fallback rules when company inference is low-confidence.
-
-## Output Contract
-
-Generated CSV columns:
-
-- `status`: `replied` | `escalated`
-- `product_area`: corpus/domain support category
-- `response`: user-facing answer grounded in retrieved corpus
-- `justification`: concise decision rationale
-- `request_type`: `product_issue` | `feature_request` | `bug` | `invalid`
-
-## Security Notes
-
-- Never hardcode secrets in code.
-- Keep keys only in `.env` (already gitignored).
-- Rotate keys immediately if accidentally exposed.
+| Column | Values |
+|---|---|
+| `status` | `replied` \| `escalated` |
+| `product_area` | `screen`, `privacy`, `travel_support`, `community`, `conversation_management`, `general_support` |
+| `response` | Corpus-grounded user-facing answer |
+| `justification` | Decision rationale with confidence tags |
+| `request_type` | `product_issue` \| `feature_request` \| `bug` \| `invalid` |
